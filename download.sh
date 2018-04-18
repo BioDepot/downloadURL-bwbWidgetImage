@@ -1,7 +1,6 @@
 #!/bin/bash
 decompString(){
     dcmd=""
-    echo 'var is' $1
     if [ $decompress = 1 ]
     then
         case $1 in
@@ -61,8 +60,8 @@ while test ${#} -gt 0 ; do
             rm ./cookie
             echo No problem with virus check no verification needed
             decompString $filename
-            echo "curl  -L https://drive.google.com/uc?export=download&id=${fileID} $dcmd"
-            curl  -L "https://drive.google.com/uc?export=download&id=$fileID" $dcmd
+            echo "curl  -L 'https://drive.google.com/uc?export=download&id=${fileID}' $dcmd"
+            bash -c "curl  -L 'https://drive.google.com/uc?export=download&id=$fileID' $dcmd"
         else
             echo Verification code to bypass virus scan is $code 
             decompString $filename
