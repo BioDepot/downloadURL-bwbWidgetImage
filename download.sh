@@ -1,89 +1,156 @@
 #!/bin/bash
 decompString(){
     dcmd=""
-    if [ $decompress = 1 ]
+    if [ -n "$decompress" ]
     then
         case $1 in
         *.tar.bz2 | *.tbz2 )
-            dcmd='| tar xj'
+            if [ -n "$concatenateFile" ]; then
+                dcmd="| tar xjO >> $concatenateFile"
+            else
+                dcmd='| tar xj'
+            fi
             return
             ;;
         *.tar.gz | *.tgz) 
-            dcmd='| tar xz'
-            return
+            if [ -n "$concatenateFile" ]; then
+                dcmd="| tar xzO >> $concatenateFile"
+            else
+                dcmd='| tar xz'
+            fi
             ;;  
         *.tar)
-            dcmd='| tar x'
-            return
+            if [ -n "$concatenateFile" ]; then
+                dcmd="| tar xO >> $concatenateFile"
+            else
+                dcmd='| tar x'
+            fi
             ;;
         *.gz)
-            dcmd='| gzip'
+            if [ -n "$concatenateFile" ]; then
+                dcmd="| gzip -d >> $concatenateFile"
+            else
+                dcmd="| gzip -d > ${1%.gz}"
+            fi
             return
             ;;
         *.bz2)
-            dcmd='| bzip2 -d'
+            if [ -n "$concatenateFile" ]; then
+                dcmd="| bzip2 -d >> $concatenateFile"
+            else
+                dcmd="| bzip2 -d > ${1%.gz}"
+            fi
             return
             ;;
         *.zip)
-            dcmd="&& unzip -o' $filename '&& rm $filename"
+            if [ -n "$concatenateFile" ]; then
+                dcmd="&& unzip -p >> $concatenateFile"
+            else
+                dcmd="&& unzip -o' $filename '&& rm $filename"
+            fi
             return
             ;;
         esac
     fi
-    dcmd="-o $filename"
+    if [ -n "$concatenateFile" ]; then
+        dcmd=">> $concatenateFile"
+    else
+        dcmd="-o $filename"
+    fi
     return
 }
-decompress=0
-if [ $1 = "-d" ]; then
-    #decompress mode
-    decompress=1
-    shift
-fi
-    mkdir -p $1
-    cd $1
-    shift
-#loop through the urls
-while test ${#} -gt 0 ; do
-    if [[ $1 == https://drive.google.com/file/d/* ]] 
-    then
-        url=$1
-        echo google drive url is $url
-        fileID=${url##*https://drive.google.com/file/d/}
+while [[ $# -gt 0 ]] ; do
+    case $1 in
+    --decompress)
+        decompress=1
+        shift 
+        ;;
+    --directory)
+        mkdir -p $2
+        cd $2
+        shift
+        shift 
+        ;;
+    --concatenateFile)
+        concatenateFile=$2
+        shift
+        shift 
+        ;;
+    *)   
+    urls+=("$1")
+    shift # past argument
+    ;;
+    esac
+done
+
+
+function findFilename(){
+ #check if it fits the
+    if [[  $1 == *drive.google.com/file/d/* ]]; then
+        fileID=$(echo "$1" | sed -n -e  's/.*drive\.google\.com\/file\/d\///p' | sed  's:/.*::')
+    else  
+        fileID=$(echo "$1" | sed -n -e 's/.*\?id\=//p')
         fileID=${fileID%%/*}
-        echo fileID is $fileID
-        filename=$(curl -s $url |  grep -o '<title>.* - Google' | head -c -10  | cut -c 8- | tr -d '\n')
-        echo filename is $filename
-        #get a cookie and check if there is a verification code 
-        curl -c ./cookie -r 0-0 -s -L "https://drive.google.com/uc?export=download&id=${fileID}" >& /dev/null
-        code=$(cat ./cookie | grep -o 'download_warning.*' | cut -f2)
-        if [ -z $code ]; then
-            rm ./cookie
-            echo No problem with virus check no verification needed
-            decompString $filename
-            echo "curl  -L 'https://drive.google.com/uc?export=download&id=${fileID}' $dcmd"
-            bash -c "curl  -L 'https://drive.google.com/uc?export=download&id=$fileID' $dcmd"
+    fi
+    echo fileID is ${fileID}
+    filename=$(curl -s -L "$1" | sed -n -e 's/.*<meta property\="og\:title" content\="//p' | sed -n -e 's/">.*//p')
+    curl -c ./cookie -r 0-0 -s -L "https://drive.google.com/uc?export=download&id=${fileID}" >& /dev/null
+    code=$(cat ./cookie | grep -o 'download_warning.*' | cut -f2)
+    echo filename is "$filename"
+    if [[ -n "$code" ]]; then
+        echo code is "$code"
+    fi
+
+}
+#empty the concatenateFile if it exists
+#do it here instead of in parse loop because in case the directory change comes after the concatenate
+if [ -n "$concatenateFile" ]; then
+    bash -c "> $concatenateFile"
+fi
+
+#loop through the urls
+for url in  "${urls[@]}" ; do
+
+    if [[ $url == *drive.google.com* ]]  
+    then
+        #find filename and fileID and keep cookie
+        findFilename $url
+        echo "google drive url is $url filename is $filename fileID is $fileID"
+            #get a cookie and check if there is a verification code 
+        if [[ -n "$filename" ]]; then    
+            if [ -z $code ]; then
+                rm ./cookie
+                echo No problem with virus check no verification needed
+                decompString "$filename"
+                echo "curl  -L 'https://drive.google.com/uc?export=download&id=${fileID}' $dcmd"
+                bash -c "curl  -L 'https://drive.google.com/uc?export=download&id=$fileID' $dcmd"
+            else
+                echo Verification code to bypass virus scan is $code 
+                decompString "$filename"
+                echo "curl  -Lb ./cookie 'https://drive.google.com/uc?export=download&confirm=${code}&id=$fileID' $dcmd"
+                bash -c "curl -Lb ./cookie 'https://drive.google.com/uc?export=download&confirm=${code}&id=$fileID' $dcmd"
+                rm ./cookie
+            fi
         else
-            echo Verification code to bypass virus scan is $code 
-            decompString $filename
-            echo "curl  -Lb ./cookie 'https://drive.google.com/uc?export=download&confirm=${code}&id=$fileID' $dcmd"
-            bash -c "curl -Lb ./cookie 'https://drive.google.com/uc?export=download&confirm=${code}&id=$fileID' $dcmd"
-            rm ./cookie
+            echo "did not download $url - can't find filename - authentication may be required"
         fi
     else
-        echo 'url' $1 'is not from google drive'
-        if [ $decompress = 0 ] 
+        echo "url $url is not from google drive"
+        if [ -n "$decompress" ] 
         then
-            curl -JLO $1
+            filename="${url##*/}"
+            echo filename is "$filename"
+            decompString "$filename"
+            echo "curl $url $dcmd" 
+            bash -c "curl $url $dcmd"     
         else
-            case $1 in
-            *.tar.bz2 | *.tbz2 ) curl  $1 | tar xj   ;;
-            *.tar.gz | *.tgz)    curl  $1 | tar xz   ;;  
-            *.tar)               curl  $1 | tar x    ;;
-            *.gz)                curl  $1 | gzip     ;;
-            *.bz2)               curl  $1 | bzip2 -d ;;
-            *.zip)               curl  -o ./temp.zip $1 && unzip -o temp.zip && rm temp.zip   ;;
-            *)                   curl -JLO $1            ;;
-            esac           
+            if [ -n "$concatenateFile" ]; then
+                echo  'curl $url >>' "$concatenateFile"
+                bash -c "curl url >> $concatenateFile"
+            else
+                echo "curl -JLO $url"
+                bash -c "curl -JLO $url"
+            fi
         fi
     fi
     shift
